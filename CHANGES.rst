@@ -1,8 +1,11 @@
-0.10.0 (2025-06-18)
+0.11.0 (unreleased)
 ===================
 
-- ``okify_regtests`` no longer emits duplicate prompts in the presence
-  of duplicate ``*_okify.json`` files. [#85]
+- ``okify_regtests`` no longer supports ``okify_op="folder_copy"``
+  for JWST regression tests because it is no longer used downstream. [#92]
+
+0.10.0 (2025-06-18)
+===================
 
 - ``okify_regtests`` now supports new ``okify_op="sdp_pool_copy"``
   for JWST regression tests. [#86]
