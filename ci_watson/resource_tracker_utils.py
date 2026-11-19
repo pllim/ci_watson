@@ -1,9 +1,15 @@
 """Functions for interpreting resource_tracker outputs."""
 
+import os
 from collections import defaultdict
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
-__all__ = ["parse_single_junit_result_xml"]
+__all__ = [
+    "parse_single_junit_result_xml",
+    "write_benchmarks_per_tst",
+    "read_benchmarks_per_tst",
+]
 
 
 def parse_single_junit_result_xml(source):
@@ -20,15 +26,13 @@ def parse_single_junit_result_xml(source):
     test_date : str
         Date the test was run.
 
-    failures : int
-        Number of test failures in the run.
-
     peakmem_dict : dict
         Dictionary mapping a test to another dictionary
         containing its benchmark statistics, e.g.::
 
             {
                 (classname, name): {
+                    "passed": 1,
                     "peakmem": 0.1,
                     "time": 10
                 }
@@ -54,9 +58,6 @@ def parse_single_junit_result_xml(source):
         items = element.findall("testsuite")[0]
         if items is not None:
             test_date = items.attrib["timestamp"]
-            # Also get the failures variable.
-            failures = int(items.attrib["failures"])
-
             break
         else:
             raise ValueError("XML format change!")
@@ -67,6 +68,7 @@ def parse_single_junit_result_xml(source):
     # All test cases will be under the testsuite element, as follows:
     #
     # <testcase classname="pkg.module" name="test_name" time="16.539">
+    #   <failure message="...">...</failure>
     #   <properties>
     #     <property name="tracked-peakmem" value="802075618"/>
     #     <property name="tracked-time" value="16.49477450037375"/>
@@ -77,19 +79,133 @@ def parse_single_junit_result_xml(source):
         tracked_mem_elements = element.findall("properties/property")
 
         # If this list does not exist, no memory peak was recorded.
-        if tracked_mem_elements:
-            # Some tests have the same name but are in different modules,
-            # so we need tuple as unique key.
-            # Also make sure the test name does not contain / because this
-            # causes problems with pathlib later.
-            classname = element.attrib["classname"]
-            testname = element.attrib["name"].replace("/", "--")
-            key = (classname, testname)
+        if not tracked_mem_elements:
+            continue
 
-            for prop in tracked_mem_elements:
-                # Save the peak memory and run time.
-                for attrname in ("peakmem", "time"):
-                    if prop.attrib["name"] == f"tracked-{attrname}":
-                        peakmem_dict[key][attrname] = prop.get("value")
+        # Some tests have the same name but are in different modules,
+        # so we need tuple as unique key.
+        # Also make sure the names are friendly for filename
+        # serialization later.
+        classname = element.attrib["classname"].replace(".", "__")
+        testname = element.attrib["name"].replace("/", "__")
+        key = (classname, testname)
 
-    return test_date, failures, peakmem_dict
+        # Save the peak memory (bytes) and run time (seconds).
+        for prop in tracked_mem_elements:
+            for attrname in ("peakmem", "time"):
+                if prop.attrib["name"] == f"tracked-{attrname}":
+                    peakmem_dict[key][attrname] = prop.get("value")
+
+        # Save the test status.
+        failure = element.findall("failure")
+        if failure:
+            peakmem_dict[key]["passed"] = 0
+        else:
+            peakmem_dict[key]["passed"] = 1
+
+    return test_date, peakmem_dict
+
+
+def _key_to_filename(key):
+    """Serialize key from peakmem_dict into filename."""
+    classname, testname = key
+    return f"{classname}__{testname}.csv"
+
+
+# The _tst instead of _test so pytest will not collect this.
+def write_benchmarks_per_tst(source, strun_verfile="", outdir="."):
+    """
+    Rewrite junit output for per-test benchmark ingestion.
+
+    Parameters
+    ----------
+    source : str or fileobj
+        Filename or file object containing XML data
+        to be parsed by :func:`parse_single_junit_result_xml`.
+
+    strun_verfile : str
+        Additional file with ``strun --version`` output for
+        the version combo that generated ``source``.
+        This file is needed because junit does not store the info
+        but we want to track it for benchmark results over time.
+        It is a plain text file with the following content::
+
+            stpipe: A.B.C
+            jwst: X.Y.Z
+
+    outdir : str
+        Output directory where one file per test will be
+        written to. These files are meant to be updated
+        over time. If a file exists, it will be appended to;
+        otherwise, a new file will be created. Old contents
+        are not re-validated nor checked for duplicates.
+
+    Returns
+    -------
+    file_list : list of str
+        List of written files for auditing.
+    """
+    test_date, peakmem_dict = parse_single_junit_result_xml(source)
+    outpath = Path(outdir)
+    file_list = []
+
+    if strun_verfile:
+        origlines = Path(strun_verfile).read_text()
+        versions = dict(map(str.strip, c.split(":")) for c in origlines.strip().split("\n"))
+    else:
+        versions = {"stpipe": "unknown", "jwst": "unknown"}
+
+    for key, val in peakmem_dict.items():
+        fname = outpath / _key_to_filename(key)
+        file_list.append(str(fname))
+        if not fname.exists():
+            with open(fname, "w") as fout:
+                fout.write(f"# classname: {key[0]}\n")
+                fout.write(f"# testname: {key[1]}\n")
+                fout.write("test_date,passed,peakmem,time,stpipe,jwst\n")
+                fout.write(f"{test_date},{val['passed']},{val['peakmem']},{val['time']},{versions['stpipe']},{versions['jwst']}\n")
+        else:
+            with open(fname, "a") as fout:
+                fout.write(f"{test_date},{val['passed']},{val['peakmem']},{val['time']},{versions['stpipe']},{versions['jwst']}\n")
+
+    return file_list
+
+
+def read_benchmarks_per_tst(csvfile):
+    """
+    Read in data generated by :func:`write_benchmarks_per_tst`.
+
+    .. note:: This needs astropy to be installed.
+
+    Parameters
+    ----------
+    csvfile : str
+        CSV file with pre-defined format.
+
+    Returns
+    -------
+    tbl : Table
+        Astropy table with benchmark data.
+        Class and test names are in table metadata.
+    """
+    try:
+        from astropy import units as u
+        from astropy.table import QTable
+    except ImportError:
+        raise ImportError("Install astropy to use this function") from None
+
+    tbl = QTable.read(
+        csvfile,
+        format="ascii.csv",
+        comment="#",
+        guess=False,
+        units={"peakmem": u.byte, "time": u.s},
+    )
+
+    # Make metadata more easily accessible.
+    comments = tbl.meta["comments"]
+    d = dict(map(str.strip, c.split(":")) for c in comments)
+    del tbl.meta["comments"]
+    tbl.meta.update(d)
+
+    return tbl

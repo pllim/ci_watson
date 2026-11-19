@@ -40,6 +40,7 @@ pytest_ciwatson = "ci_watson.plugin"
 
 [project.scripts]
 okify_regtests = "ci_watson.scripts.okify_regtests:main"
+write_benchmarks = "ci_watson.scripts.write_benchmarks:main"
 
 [project.optional-dependencies]
 all = [
