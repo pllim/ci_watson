@@ -233,6 +233,7 @@ def plot_benchmarks_per_tst(csv_input, savefig=""):
     """
     try:
         import matplotlib.pyplot as plt
+        import numpy as np
         from astropy import units as u
         from astropy.table import QTable
         from astropy.visualization import quantity_support
@@ -244,12 +245,13 @@ def plot_benchmarks_per_tst(csv_input, savefig=""):
     else:
         tbl = csv_input
 
-    passed = tbl["passed"].data
+    # TODO: How to visualize this also?
+    #passed = tbl["passed"].data
+
     peakmem = tbl["peakmem"].to(u.GB)
     runtime = tbl["time"]
     xticks = np.arange(runtime.size)
     xlabels = tbl["jwst"]  # jwst, stpipe, test_date
-    mcolors = ["g" if x else "r" for x in passed]
     plot_title = f"{tbl.meta['classname']}, {tbl.meta['testname']}"
 
     if savefig:
@@ -261,12 +263,12 @@ def plot_benchmarks_per_tst(csv_input, savefig=""):
     fig, axes = plt.subplots(2, 1, sharex=True)
 
     ax0 = axes[0]
-    ax0.plot(peakmem, c=colors, marker="o", ls="")
+    ax0.plot(peakmem, c="k", marker="o", ls="")
     ax0.set_title(plot_title)
 
     ax1 = axes[1]
-    ax1.plot(runtime, c=colors, marker="o", ls="")
-    ax1.set_ticks(xticks, labels=xlabels)
+    ax1.plot(runtime, c="k", marker="o", ls="")
+    ax1.set_xticks(xticks, labels=xlabels)
 
     plt.draw()
     if savefig:
