@@ -9,6 +9,7 @@ __all__ = [
     "parse_single_junit_result_xml",
     "write_benchmarks_per_tst",
     "read_benchmarks_per_tst",
+    "plot_benchmarks_per_tst",
 ]
 
 
@@ -184,8 +185,8 @@ def read_benchmarks_per_tst(csvfile):
 
     Returns
     -------
-    tbl : Table
-        Astropy table with benchmark data.
+    tbl : QTable
+        Astropy QTable with benchmark data.
         Class and test names are in table metadata.
     """
     try:
@@ -209,3 +210,64 @@ def read_benchmarks_per_tst(csvfile):
     tbl.meta.update(d)
 
     return tbl
+
+
+def plot_benchmarks_per_tst(csv_input, savefig=""):
+    """
+    Visualize benchmark statistics for a single test.
+
+    .. note:: This needs astropy and matplotlib to be installed.
+
+    Parameters
+    ----------
+    csvfile : str or QTable
+        CSV file for input into or Astropy QTable returned by
+        :func:`read_benchmarks_per_tst`.
+
+    savefig : str
+        If provided, generated plot will be saved to the
+        given file path and interactive mode is disabled.
+        Otherwise, interactive mode is enabled
+        (whether the plot actually shows up or not
+        depends on your terminal settings).
+    """
+    try:
+        import matplotlib.pyplot as plt
+        from astropy import units as u
+        from astropy.table import QTable
+        from astropy.visualization import quantity_support
+    except ImportError:
+        raise ImportError("Install astropy and matplotlib to use this function") from None
+
+    if not isinstance(csv_input, QTable):
+        tbl = read_benchmarks_per_tst(csv_input)
+    else:
+        tbl = csv_input
+
+    passed = tbl["passed"].data
+    peakmem = tbl["peakmem"].to(u.GB)
+    runtime = tbl["time"]
+    xticks = np.arange(runtime.size)
+    xlabels = tbl["jwst"]  # jwst, stpipe, test_date
+    mcolors = ["g" if x else "r" for x in passed]
+    plot_title = f"{tbl.meta['classname']}, {tbl.meta['testname']}"
+
+    if savefig:
+        plt.ioff()
+    else:
+        plt.ion()
+
+    quantity_support()
+    fig, axes = plt.subplots(2, 1, sharex=True)
+
+    ax0 = axes[0]
+    ax0.plot(peakmem, c=colors, marker="o", ls="")
+    ax0.set_title(plot_title)
+
+    ax1 = axes[1]
+    ax1.plot(runtime, c=colors, marker="o", ls="")
+    ax1.set_ticks(xticks, labels=xlabels)
+
+    plt.draw()
+    if savefig:
+        fig.savefig(savefig)
